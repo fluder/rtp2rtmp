@@ -4,6 +4,7 @@ import (
 	"net"
 	"fmt"
 	"./muxers"
+	"os"
 )
 
 func main() {
@@ -15,9 +16,23 @@ func main() {
 	}
 
 	rtpDemuxer := muxers.NewRtpDemuxer()
-	rtpH264Demuxer := muxers.NewRtpH264Demuxer()
+	rtpH264Demuxer := muxers.NewRtpH264Depacketizer()
 
 	muxers.Bridge(rtpDemuxer.OutputChan, rtpH264Demuxer.InputChan)
+
+	go func() {
+		f, _ := os.Create("/tmp/test.h264")
+		f.Write([]byte{0, 0, 0, 1})
+		for {
+			packet := (<-rtpH264Demuxer.OutputChan).(*muxers.RtpPacket)
+			fmt.Println(packet.Payload[0] & 31)
+			fmt.Println(packet.Timestamp)
+			if packet.Payload[0] & 31 < 23 {
+				f.Write(packet.Payload)
+				f.Write([]byte{0, 0, 1})
+			}
+		}
+	}()
 
 	for {
 		buf := make([]byte, 1500)
