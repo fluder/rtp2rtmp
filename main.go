@@ -17,20 +17,20 @@ func main() {
 
 	rtpDemuxer := muxers.NewRtpDemuxer()
 	rtpH264Demuxer := muxers.NewRtpH264Depacketizer()
+	//flvMuxer := muxers.NewFlvMuxer()
 
 	muxers.Bridge(rtpDemuxer.OutputChan, rtpH264Demuxer.InputChan)
+	//muxers.Bridge(rtpH264Demuxer.OutputChan, flvMuxer.InputChan)
 
 	go func() {
-		f, _ := os.Create("/tmp/test.h264")
-		f.Write([]byte{0, 0, 0, 1})
+		f, _ := os.Create("/tmp/raw1.h264")
+		f.Write([]byte{0,0,0,1})
 		for {
-			packet := (<-rtpH264Demuxer.OutputChan).(*muxers.RtpPacket)
-			fmt.Println(packet.Payload[0] & 31)
-			fmt.Println(packet.Timestamp)
-			if packet.Payload[0] & 31 < 23 {
-				f.Write(packet.Payload)
-				f.Write([]byte{0, 0, 1})
-			}
+			data := (<-rtpH264Demuxer.OutputChan).(*muxers.RtpPacket)
+
+			fmt.Println(data.Payload[0] & 31)
+			f.Write(data.Payload)
+			f.Write([]byte{0,0,1})
 		}
 	}()
 

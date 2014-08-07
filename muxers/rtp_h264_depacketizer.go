@@ -38,7 +38,7 @@ func NewRtpH264Depacketizer() *RtpH264Depacketizer {
 				if (fu_header >> 6) & 1 == 1 {
 					// End
 					packet.Payload = make([]byte, 0)
-					packet.Payload = append(packet.Payload, 0 | (header & 224) | (fu_header & 31))
+					packet.Payload = append(packet.Payload, 0 | (header & 96) | (fu_header & 31))
 					for _, fragment := range fragments {
 						packet.Payload = append(packet.Payload, fragment.Payload[2:]...)
 					}
