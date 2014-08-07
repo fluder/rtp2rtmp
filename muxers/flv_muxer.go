@@ -21,7 +21,7 @@ func NewFlvMuxer() *FlvMuxer {
 		var SPS, PPS []byte
 		var firstTimestamp uint32
 		// Write Flv header
-		muxer.OutputChan <-FlvHeader
+		//muxer.OutputChan <-FlvHeader
 
 		for {
 			var videoDataPayload []byte
@@ -78,13 +78,12 @@ func NewFlvMuxer() *FlvMuxer {
 				Timestamp: uint32(packet.Timestamp - firstTimestamp) / 90,
 				Data: videoDataPayload,
 			}
-			flvTagPayload := marshalFlvTag(flvTag)
-			fmt.Println(uint32(packet.Timestamp - firstTimestamp) / 90)
+			//flvTagPayload := marshalFlvTag(flvTag)
 
-			muxer.OutputChan <-flvTagPayload
-			tagSize := make([]byte, 4)
-			binary.BigEndian.PutUint32(tagSize, uint32(len(flvTagPayload)))
-			muxer.OutputChan <-tagSize
+			muxer.OutputChan <-flvTag
+			//tagSize := make([]byte, 4)
+			//binary.BigEndian.PutUint32(tagSize, uint32(len(flvTagPayload)))
+			//muxer.OutputChan <-tagSize
 		}
 	}()
 
