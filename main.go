@@ -1,36 +1,42 @@
 package main
 
 import (
-	"net"
-	"fmt"
 	"./muxers"
 )
 
 func main() {
-	addr, _ := net.ResolveUDPAddr("udp4", ":5000")
-	conn, err := net.ListenUDP("udp4", addr)
-	if err != nil {
-		fmt.Printf("Error during listening udp socket: %s\n", err.Error())
-		return
-	}
 
-	rtpDemuxer := muxers.NewRtpDemuxer()
-	rtpH264Demuxer := muxers.NewRtpH264Depacketizer()
+
+	videoUdpSource := muxers.NewUdpSource(5000)
+	videoRtpDemuxer := muxers.NewRtpDemuxer()
+	videoRtpH264Demuxer := muxers.NewRtpH264Depacketizer()
+
 	flvMuxer := muxers.NewFlvMuxer()
-	rtmpSink := muxers.NewRtmpSink("rtmp://s1.transcoding.svoe.tv/source1", "test_stream")
+	rtmpSink := muxers.NewRtmpSink("rtmp://s1.transcoding.svoe.tv/gst", "test")
 
-	muxers.Bridge(rtpDemuxer.OutputChan, rtpH264Demuxer.InputChan)
-	muxers.Bridge(rtpH264Demuxer.OutputChan, flvMuxer.InputChan)
+	muxers.Bridge(videoUdpSource.OutputChan, videoRtpDemuxer.InputChan)
+	muxers.Bridge(videoRtpDemuxer.OutputChan, videoRtpH264Demuxer.InputChan)
+	muxers.Bridge(videoRtpH264Demuxer.OutputChan, flvMuxer.InputVideoChan)
+
+	audioUdpSource := muxers.NewUdpSource(5002)
+	audioRtpDemuxer := muxers.NewRtpDemuxer()
+	audioRtpMPESDepacketizer := muxers.NewRtpMPESDepacketizer()
+
+	muxers.Bridge(audioUdpSource.OutputChan, audioRtpDemuxer.InputChan)
+	muxers.Bridge(audioRtpDemuxer.OutputChan, audioRtpMPESDepacketizer.InputChan)
+	muxers.Bridge(audioRtpMPESDepacketizer.OutputChan, flvMuxer.InputAudioChan)
+
 	muxers.Bridge(flvMuxer.OutputChan, rtmpSink.InputChan)
 
-	for {
-		buf := make([]byte, 1500)
-		size, _, err := conn.ReadFrom(buf)
-		if err != nil {
-			fmt.Printf("Error during receiving packet: %s\n", err.Error())
-			continue
-		}
+	//go func() {
+	//	f, _ := os.Create("/tmp/test.aac")
+	//	//f.Write([]byte{0, 0, 0, 1})
+	//	for {
+	//		data := (<-audioRtpMPESDepacketizer.OutputChan).([]byte)
+	//		f.Write(data)
+	//		//f.Write([]byte{0, 0, 1})
+	//	}
+	//}()
 
-		rtpDemuxer.InputChan <- buf[:size]
-	}
+	select {}
 }

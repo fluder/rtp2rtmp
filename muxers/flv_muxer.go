@@ -4,90 +4,171 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 type FlvMuxer struct {
-	InputChan chan interface {}
+	InputVideoChan chan interface {}
+	InputAudioChan chan interface {}
 	OutputChan chan interface {}
+
+	SPS, PPS []byte
+	SPSSent bool
 }
 
 func NewFlvMuxer() *FlvMuxer {
 	muxer := &FlvMuxer{
-		InputChan: make(chan interface {}),
+		InputVideoChan: make(chan interface {}),
+		InputAudioChan: make(chan interface {}),
 		OutputChan: make(chan interface {}),
 	}
 
 	go func() {
-		var SPS, PPS []byte
 		var firstTimestamp uint32
-		// Write Flv header
-		//muxer.OutputChan <-FlvHeader
+		var firstTs int64
+
+		firstTs = time.Now().UnixNano()
+
+		audioData := &AudioData{
+			SoundFormat: SOUND_FORMAT_AAC,
+			SoundRate: SOUND_RATE_44,
+			SoundSize: SOUND_SIZE_8,
+			SoundType: SOUND_TYPE_STEREO,
+			AACPacketType: AAC_HEADER,
+			Data: []byte{0x11, 0x90, 0x56, 0xe5, 0x00},
+		}
+		audioDataPayload := marshalAudioData(audioData)
+
+		flvTag := &FlvTag{
+			TagType: TAG_AUDIO,
+			DataSize: uint32(len(audioDataPayload)),
+			Timestamp: uint32(firstTs / 1000000),
+			Data: audioDataPayload,
+		}
+
+		muxer.OutputChan <-flvTag
+
 
 		for {
-			var videoDataPayload []byte
-			packet := (<-muxer.InputChan).(*RtpPacket)
-			fmt.Println(packet.Timestamp)
-			if firstTimestamp == 0 {
-				firstTimestamp = packet.Timestamp
-			}
-			if packet.Payload[0] & 31 == 7 {
-				SPS = packet.Payload
-			}
-			if packet.Payload[0] & 31 == 8 {
-				PPS = packet.Payload
-			}
-			if packet.Payload[0] & 31 == 7 || packet.Payload[0] & 31 == 8 {
-				if SPS != nil && PPS != nil {
-					record := &AVCDecoderConfigurationRecord{
-						ConfigurationVersion: 1,
-						AVCProfileIndication: SPS[1],
-						ProfileCompatibility: SPS[2],
-						AVCLevelIndication: SPS[3],
-						SPS: SPS,
-						PPS: PPS,
-					}
+			select {
+			case value := <-muxer.InputVideoChan:
+				packet := value.(*RtpPacket)
 
-					videoData := &VideoData{
-						FrameType: FRAME_TYPE_KEY,
-						CodecID: CODEC_AVC,
-						AVCPacketType: AVC_SEQ_HEADER,
-						CompositionTime: 0,
-						Data: marshalAVCDecoderConfigurationRecord(record),
-					}
-					videoDataPayload = marshalVideoData(videoData)
-					fmt.Println("SPS & PPS")
-					SPS = nil
-					PPS = nil
-				} else {
+				if firstTimestamp == 0 {
+					firstTimestamp = packet.Timestamp
+				}
+
+				dts := uint32((time.Now().UnixNano() - firstTs) / 1000000)
+				pts := uint32((packet.Timestamp - firstTimestamp) / 90) + 1000
+
+				videoDataPayload := muxer.muxVideoPacket(packet, dts, pts)
+
+				if videoDataPayload == nil {
 					continue
 				}
-			} else {
-				videoData := &VideoData{
-					FrameType: FRAME_TYPE_KEY,
-					CodecID: CODEC_AVC,
-					AVCPacketType: AVC_NALU,
-					CompositionTime: 0,
-					Data: packet.Payload,
+
+				flvTag := &FlvTag{
+					TagType: TAG_VIDEO,
+					DataSize: uint32(len(videoDataPayload)),
+					Timestamp: dts,
+					Data: videoDataPayload,
 				}
-				videoDataPayload = marshalVideoData(videoData)
-			}
 
-			flvTag := &FlvTag{
-				TagType: TAG_VIDEO,
-				DataSize: uint32(len(videoDataPayload)),
-				Timestamp: uint32(packet.Timestamp - firstTimestamp) / 90,
-				Data: videoDataPayload,
-			}
-			//flvTagPayload := marshalFlvTag(flvTag)
+				muxer.OutputChan <-flvTag
+			case value := <-muxer.InputAudioChan:
+				packet := value.(*RtpPacket)
 
-			muxer.OutputChan <-flvTag
-			//tagSize := make([]byte, 4)
-			//binary.BigEndian.PutUint32(tagSize, uint32(len(flvTagPayload)))
-			//muxer.OutputChan <-tagSize
+				if firstTimestamp == 0 {
+					firstTimestamp = packet.Timestamp
+				}
+
+				dts := uint32((time.Now().UnixNano() - firstTs) / 1000000)
+				pts := uint32((packet.Timestamp - firstTimestamp) / 90) + 1000
+
+				audioDataPayload := muxer.muxAudioPacket(packet, dts, pts)
+
+				flvTag := &FlvTag{
+					TagType: TAG_AUDIO,
+					DataSize: uint32(len(audioDataPayload)),
+					Timestamp: dts,
+					Data: audioDataPayload,
+				}
+
+				muxer.OutputChan <-flvTag
+			}
 		}
 	}()
 
 	return muxer
+}
+
+func (muxer *FlvMuxer) muxVideoPacket(packet *RtpPacket, dts, pts uint32) []byte {
+	var videoDataPayload []byte
+
+	if packet.Payload[0] & 31 == 7 {
+		muxer.SPS = packet.Payload
+	}
+	if packet.Payload[0] & 31 == 8 {
+		muxer.PPS = packet.Payload
+	}
+
+	if packet.Payload[0] & 31 == 7 || packet.Payload[0] & 31 == 8 {
+		if muxer.SPS != nil && muxer.PPS != nil && muxer.SPSSent == false {
+			record := &AVCDecoderConfigurationRecord{
+				ConfigurationVersion: 1,
+				AVCProfileIndication: muxer.SPS[1],
+				ProfileCompatibility: muxer.SPS[2],
+				AVCLevelIndication: muxer.SPS[3],
+				SPS: muxer.SPS,
+				PPS: muxer.PPS,
+			}
+
+			videoData := &VideoData{
+				FrameType: FRAME_TYPE_KEY,
+				CodecID: CODEC_AVC,
+				AVCPacketType: AVC_SEQ_HEADER,
+				CompositionTime: int32(pts-dts),
+				Data: marshalAVCDecoderConfigurationRecord(record),
+			}
+			videoDataPayload = marshalVideoData(videoData)
+			fmt.Println("SPS & PPS")
+			muxer.SPSSent = true
+		} else {
+			return nil
+		}
+	} else {
+		videoData := &VideoData{
+			FrameType: FRAME_TYPE_INTER,
+			CodecID: CODEC_AVC,
+			AVCPacketType: AVC_NALU,
+			CompositionTime: int32(pts-dts),
+			Data: packet.Payload,
+		}
+		fmt.Println(packet.Payload[0] & 31)
+		if packet.Payload[0] & 31 == 5 {
+			fmt.Println("Key!")
+			videoData.FrameType = FRAME_TYPE_KEY
+		}
+		videoDataPayload = marshalVideoData(videoData)
+	}
+
+	return videoDataPayload
+}
+
+func (muxer *FlvMuxer) muxAudioPacket(packet *RtpPacket, dts, pts uint32) []byte {
+	var audioDataPayload []byte
+
+	audioData := &AudioData{
+		SoundFormat: SOUND_FORMAT_AAC,
+		SoundRate: SOUND_RATE_44,
+		SoundSize: SOUND_SIZE_8,
+		SoundType: SOUND_TYPE_STEREO,
+		AACPacketType: AAC_RAW,
+		Data: packet.Payload,
+	}
+	audioDataPayload = marshalAudioData(audioData)
+
+	return audioDataPayload
 }
 
 var FlvHeader []byte = []byte{0x46, 0x4c, 0x56, 0x01, 0x05, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00}
@@ -122,6 +203,15 @@ type AVCDecoderConfigurationRecord struct {
 	PPS []byte
 }
 
+type AudioData struct {
+	SoundFormat uint8
+	SoundRate uint8
+	SoundSize uint8
+	SoundType uint8
+	AACPacketType uint8
+	Data []byte
+}
+
 const (
 	FRAME_TYPE_KEY = 1
 	FRAME_TYPE_INTER = 2
@@ -144,6 +234,29 @@ const (
 	AVC_SEQ_HEADER = 0
 	AVC_NALU = 1
 	AVC_SEQ_END = 2
+)
+
+const (
+	SOUND_FORMAT_AAC = 10
+)
+
+const (
+	SOUND_RATE_44 = 3
+)
+
+const (
+	SOUND_SIZE_8 = 0
+	SOUND_SIZE_16 = 1
+)
+
+const (
+	SOUND_TYPE_MONO = 0
+	SOUND_TYPE_STEREO = 1
+)
+
+const (
+	AAC_HEADER = 0
+	AAC_RAW = 1
 )
 
 func marshalVideoData(videoData *VideoData) []byte {
@@ -184,6 +297,16 @@ func marshalAVCDecoderConfigurationRecord(record *AVCDecoderConfigurationRecord)
 	binary.Write(writer, binary.BigEndian, uint8(0x01))
 	binary.Write(writer, binary.BigEndian, uint16(len(record.PPS)))
 	writer.Write(record.PPS)
+
+	return writer.Bytes()
+}
+
+func marshalAudioData(audioData *AudioData) []byte {
+	writer := bytes.NewBuffer([]byte{})
+
+	binary.Write(writer, binary.BigEndian, uint8(0) | (audioData.SoundFormat << 4) | (audioData.SoundRate << 2) | (audioData.SoundSize << 1) | (audioData.SoundType))
+	binary.Write(writer, binary.BigEndian, audioData.AACPacketType)
+	writer.Write(audioData.Data)
 
 	return writer.Bytes()
 }

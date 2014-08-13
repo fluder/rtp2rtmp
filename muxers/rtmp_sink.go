@@ -96,8 +96,12 @@ func (handler *RtmpSinkHandler) OnPublishStart(stream rtmp.OutboundStream) {
 		fmt.Println("Publish")
 		for {
 			flvTag := (<-handler.flvChan).(*FlvTag)
-			fmt.Println("Push data")
-			stream.PublishVideoData(flvTag.Data, flvTag.Timestamp)
+			//fmt.Println("Push data")
+			if flvTag.TagType == TAG_VIDEO {
+				stream.PublishVideoData(flvTag.Data, flvTag.Timestamp)
+			} else {
+				stream.PublishAudioData(flvTag.Data, flvTag.Timestamp)
+			}
 		}
 	}()
 }
